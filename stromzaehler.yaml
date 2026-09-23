@@ -1,0 +1,234 @@
+# Stromzähler (iMSys) – IR-Lesekopf (TTL) an Waveshare ESP32-S3-Zero, Protokoll SML
+#
+# Lesekopf: wispr WS-IR-UART/TTL (3-5 V, Schmitt-Trigger, SML), Schraubklemmen VCC/RX/TX/GND
+# Zähler:   Iskra (Kennung z. B. 1ISK00xxxxxxxx), sendet etwa jede Sekunde: 96.50.1 Hersteller,
+#           96.1.0 Server-ID, 1.8.0 Bezug, 2.8.0 Einspeisung, 16.7.0 Leistung (0,1 Wh Auflösung)
+# Controller: Waveshare ESP32-S3-Zero (ESP32-S3FH4R2, 4 MB Flash, natives USB-C, RGB-LED GPIO21)
+#   https://www.waveshare.com/wiki/ESP32-S3-Zero
+#
+# Verdrahtung (Lesekopf -> ESP32-S3-Zero) – NICHT gekreuzt, RX am Kopf ist das Lesesignal:
+#   VCC -> 3V3   (liegt am Board direkt neben GND und Pin 1)
+#   GND -> GND
+#   RX  -> 1 (GPIO1)
+#   TX  -> am Lesekopf mit VCC brücken! Offen lässt der Kopf seine IR-Sendediode
+#          dauerhaft leuchten, das blendet den eigenen Fototransistor (keine Daten).
+# Kopf mit Kabelauslass nach unten an die D0-Schnittstelle setzen:
+# Fototransistor (dunkel) rechts, IR-LED (transparent) links.
+#
+# Hinweise:
+# - Momentanleistung (16.7.0) und Nachkommastellen liefert der Zähler meist erst
+#   nach Eingabe der Zähler-PIN (beim Messstellenbetreiber anfragen) und
+#   "Inf on" am Zählerdisplay.
+# - Keine Werte? Zuerst TX-VCC-Brücke am Kopf prüfen, dann Sitz des Kopfes; im Log
+#   erscheinen die empfangenen OBIS-Codes (logger level DEBUG).
+# - Status-LED (RGB an GPIO21):
+#     blau          = Zähler sendet gerade (Daten kommen)
+#     grün          = letztes Telegramm gültig empfangen, alles in Ordnung
+#     gelb blinkt   = WLAN oder Home-Assistant-Verbindung weg, Auslesen ok
+#     lila blinkt   = seit 60 s kein gültiges Telegramm (Kopf verrutscht,
+#                     Prüfsummenfehler …), Netzwerk ok
+#     rot blinkt    = beides gestört
+#   Sind Rot und Grün vertauscht: channel_colors unten von RGB auf GRB ändern.
+# - Faktor bei Zählerständen gegen das Display prüfen (typisch 0.0001 -> kWh).
+# - Zählerstände: höchstens 1x/min und nur bei Änderung; Leistung bei jeder Änderung (~1x/s).
+# - Welche OBIS-Codes der Zähler sonst noch sendet, steht im Log unter
+#   "OBIS info:" – daraus lassen sich weitere Sensoren ergänzen.
+# - Erstes Flashen per USB: Taste BOOT (B) gedrückt halten, dabei USB-C einstecken,
+#   dann loslassen (Download-Modus) und in ESPHome installieren.
+#   Danach Updates über WLAN.
+
+substitutions:
+  devicename: stromzaehler
+  friendly: Stromzähler
+  rx_pin: GPIO1
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendly}
+  comment: "iMSys-Stromzähler über IR-Lesekopf (SML, 9600 Baud) an Waveshare ESP32-S3-Zero"
+  compile_process_limit: 1   # schont den RAM auf kleinen HA-Hosts (Build dauert länger)
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG   # Logs über USB-C und WLAN
+  logs:
+    light: INFO   # LED-Wechsel nicht ins Log schreiben
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Stromzaehler Fallback Hotspot"
+    password: !secret fallback_password
+
+captive_portal:
+
+web_server:
+  port: 80
+
+uart:
+  id: uart_sml
+  rx_pin: ${rx_pin}
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  # Nur um zu erkennen, wann Bytes ankommen (für die blaue LED), es wird nichts geloggt
+  debug:
+    direction: RX
+    dummy_receiver: false
+    after:
+      bytes: 8
+    sequence:
+      - lambda: id(last_rx_ms) = millis();
+
+sml:
+  id: zaehler_sml
+  uart_id: uart_sml
+  on_data:
+    - lambda: |-
+        if (valid) id(last_valid_ms) = millis();
+
+sensor:
+  - platform: sml
+    name: "Bezug gesamt"
+    sml_id: zaehler_sml
+    obis_code: "1-0:1.8.0"
+    unit_of_measurement: kWh
+    accuracy_decimals: 3
+    device_class: energy
+    state_class: total_increasing
+    filters:
+      - multiply: 0.0001
+      - throttle: 60s     # höchstens 1x pro Minute …
+      - delta: 0.001      # … und nur, wenn sich der Stand geändert hat
+
+  - platform: sml
+    name: "Einspeisung gesamt"
+    sml_id: zaehler_sml
+    obis_code: "1-0:2.8.0"
+    unit_of_measurement: kWh
+    accuracy_decimals: 3
+    device_class: energy
+    state_class: total_increasing
+    filters:
+      - multiply: 0.0001
+      - throttle: 60s     # höchstens 1x pro Minute …
+      - delta: 0.001      # … und nur, wenn sich der Stand geändert hat
+
+  - platform: sml
+    name: "Leistung aktuell"
+    sml_id: zaehler_sml
+    obis_code: "1-0:16.7.0"
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    device_class: power
+    state_class: measurement
+    filters:
+      - delta: 1          # nur bei Änderung (ab 1 W) an HA senden
+
+  - platform: wifi_signal
+    name: "WLAN-Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Laufzeit"
+
+text_sensor:
+  - platform: sml
+    name: "Zählernummer"
+    sml_id: zaehler_sml
+    obis_code: "1-0:96.1.0"
+    format: hex
+    entity_category: diagnostic
+    filters:
+      # Server-ID nach DIN 43863-5 lesbar machen: 0x0a0149534b00<Seriennr. hex> -> 1ISK00<Seriennr. dez.>
+      - lambda: |-
+          if (x.size() != 22 || x.rfind("0x", 0) != 0) return x;
+          auto b = [&](int i) -> uint32_t {
+            return (uint32_t) strtoul(x.substr(2 + 2 * i, 2).c_str(), nullptr, 16);
+          };
+          const uint32_t serial = (b(6) << 24) | (b(7) << 16) | (b(8) << 8) | b(9);
+          char buf[40];
+          snprintf(buf, sizeof(buf), "%u%c%c%c%02u%08u", (unsigned) b(1), (char) b(2),
+                   (char) b(3), (char) b(4), (unsigned) b(5), (unsigned) serial);
+          return std::string(buf);
+
+globals:
+  - id: last_rx_ms       # Zeitpunkt der zuletzt empfangenen Bytes
+    type: uint32_t
+    initial_value: '0'
+  - id: last_valid_ms    # Zeitpunkt des letzten gültigen SML-Telegramms
+    type: uint32_t
+    initial_value: '0'
+  - id: led_mode         # aktuell angezeigter Zustand, damit nur bei Änderung geschaltet wird
+    type: int
+    initial_value: '-1'
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status-LED"
+    internal: true       # wird nur vom Gerät selbst gesteuert
+    pin: GPIO21
+    num_leds: 1
+    chipset: ws2812
+    channel_colors: RGB
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 0s
+
+interval:
+  - interval: 100ms
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          const bool net_ok = wifi::global_wifi_component->is_connected() &&
+                              api::global_api_server->is_connected();
+          const bool data_ok = id(last_valid_ms) != 0 && (now - id(last_valid_ms)) < 60000;
+          const bool receiving = id(last_rx_ms) != 0 && (now - id(last_rx_ms)) < 200 &&
+                                 id(last_rx_ms) > id(last_valid_ms);
+          const bool blink_phase = (now / 500) % 2 == 0;
+
+          // 0 = aus, 1 = blau, 2 = grün, 3 = rot, 4 = gelb, 5 = lila
+          int mode;
+          if (!net_ok && !data_ok) mode = blink_phase ? 3 : 0;   // beides gestört
+          else if (!net_ok) mode = blink_phase ? 4 : 0;          // nur Netzwerk
+          else if (!data_ok && !receiving) mode = blink_phase ? 5 : 0;  // nur Auslesen
+          else if (receiving) mode = 1;
+          else mode = 2;
+
+          if (mode == id(led_mode)) return;
+          id(led_mode) = mode;
+          if (mode == 0) {
+            auto call = id(status_led).turn_off();
+            call.set_transition_length(0);
+            call.perform();
+            return;
+          }
+          auto call = id(status_led).turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(0.1);
+          switch (mode) {
+            case 1: call.set_rgb(0.0, 0.0, 1.0); break;  // blau
+            case 2: call.set_rgb(0.0, 1.0, 0.0); break;  // grün
+            case 3: call.set_rgb(1.0, 0.0, 0.0); break;  // rot
+            case 4: call.set_rgb(1.0, 1.0, 0.0); break;  // gelb
+            default: call.set_rgb(1.0, 0.0, 1.0); break; // lila
+          }
+          call.perform();
