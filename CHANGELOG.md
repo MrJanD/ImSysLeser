@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-24 – Doku: Abgleich mit dem Wechselrichter
+
+- README: Genauigkeitsvergleich mit dem Netzzähler eines SolaX-Wechselrichters (Bezug und
+  Einspeisung stimmen auf ±0,01 kWh überein, Stundenmittel meist ≤ 10 W Abweichung).
+- README: Vorzeichen von 16.7.0 dokumentiert (positiv = Bezug, negativ = Einspeisung).
+
 ## 2026-09-23 – erste Version
 
 - ESPHome-Konfiguration für einen iMSys-Zähler (SML, 9600 Baud 8N1) mit wispr WS-IR-UART/TTL

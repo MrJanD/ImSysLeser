@@ -60,7 +60,7 @@ Wer genug RAM hat, kann die Zeile entfernen.
 |---|---|---|
 | Bezug gesamt | 1-0:1.8.0 | kWh, höchstens 1× pro Minute und nur bei Änderung |
 | Einspeisung gesamt | 1-0:2.8.0 | kWh, höchstens 1× pro Minute und nur bei Änderung |
-| Leistung aktuell | 1-0:16.7.0 | W, bei jeder Änderung (etwa 1× pro Sekunde) |
+| Leistung aktuell | 1-0:16.7.0 | W, bei jeder Änderung (etwa 1× pro Sekunde); **positiv = Bezug, negativ = Einspeisung** |
 | Zählernummer | 1-0:96.1.0 | Server-ID nach DIN 43863-5 lesbar umgerechnet, z. B. `1ISK00…` (Diagnose) |
 | WLAN-Signal, Laufzeit | – | Diagnose |
 
@@ -72,6 +72,35 @@ Der getestete Iskra-Zähler sendet mit „Inf on“ genau fünf Werte: 96.50.1 (
 (Server-ID), 1.8.0, 2.8.0 und 16.7.0 – Zählerstände mit 0,1 Wh Auflösung. Welche OBIS-Codes ein
 anderer Zähler liefert, steht im ESPHome-Log bei jedem Telegramm unter `OBIS info:`; daraus lassen
 sich weitere Sensoren ergänzen.
+
+## Genauigkeit: Abgleich mit dem Wechselrichter
+
+Zur Kontrolle wurden die Werte mit dem eigenen Netzzähler eines SolaX-Hybridwechselrichters
+verglichen (Home-Assistant-Recorder, Wechselrichter wird alle 10 s abgefragt).
+
+**Nacht, 23.09.2026, 1 h nur Bezug:** Mittel 754 W am Zähler gegenüber 756 W am Wechselrichter,
+Energie 0,763 gegenüber 0,760 kWh.
+
+**24.09.2026, 00:35–14:20, Bezug und Einspeisung (PV bis knapp 8 kW):**
+
+| | ImSysLeser | Wechselrichter |
+|---|---|---|
+| Bezug | 3,192 kWh | 3,19 kWh |
+| Einspeisung | 10,754 kWh | 10,76 kWh |
+| größte Einspeiseleistung | −7922 W | 7919 W |
+
+Die Stundenmittel der Leistung weichen meist um höchstens 10 W ab, maximal um 30 W (< 1 %).
+Der Median der Abweichung der 5-Minuten-Mittel liegt bei 2,4 W.
+
+Es gibt weder Skalierungsfehler noch Offset. Größere Abweichungen in einzelnen
+5-Minuten-Fenstern (bis ~190 W) treten nur bei schnell wechselnder PV-Leistung auf: Der
+Wechselrichter wird nur alle 10 s abgefragt und hinkt einige Sekunden hinterher, deshalb
+fehlen ihm kurze Spitzen, die der Zähler im Sekundentakt erfasst. Die absoluten
+Zählerstände beider Geräte unterscheiden sich, weil sie unterschiedlich lange zählen –
+verglichen werden daher nur die Zuwächse.
+
+Vorzeichen beachten: Der Zähler meldet Einspeisung **negativ**, der SolaX-Wechselrichter
+(`measured_power`) positiv. Der Betrag stimmt überein.
 
 ## Status-LED
 
